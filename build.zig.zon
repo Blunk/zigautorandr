@@ -1,0 +1,8 @@
+.{
+    .name = .edidrandr,
+    .version = "0.1.0",
+    .fingerprint = 0xd44c412e06f61639, // Never change this; it identifies the package.
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{},
+    .paths = .{ "build.zig", "build.zig.zon", "src", "README.md" },
+}

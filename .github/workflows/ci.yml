@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags are needed for the version string
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Format
+        run: zig fmt --check build.zig build.zig.zon src
+      - name: Test
+        run: zig build test
+      - name: Build release targets
+        run: |
+          for target in x86_64-linux-musl aarch64-linux-musl; do
+            zig build -Doptimize=ReleaseSafe -Dtarget=$target --prefix "out/$target"
+          done
+          out/x86_64-linux-musl/bin/edidrandr --version
