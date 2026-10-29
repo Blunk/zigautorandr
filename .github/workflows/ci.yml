@@ -24,4 +24,4 @@ jobs:
           for target in x86_64-linux-musl aarch64-linux-musl; do
             zig build -Doptimize=ReleaseSafe -Dtarget=$target --prefix "out/$target"
           done
-          out/x86_64-linux-musl/bin/edidrandr --version
+          out/x86_64-linux-musl/bin/zigautorandr --version

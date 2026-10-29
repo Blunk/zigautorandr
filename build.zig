@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
     options.addOption([]const u8, "version", version);
 
     const exe = b.addExecutable(.{
-        .name = "edidrandr",
+        .name = "zigautorandr",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     const run = b.addRunArtifact(exe);
     run.step.dependOn(b.getInstallStep());
     if (b.args) |args| run.addArgs(args);
-    b.step("run", "Run edidrandr").dependOn(&run.step);
+    b.step("run", "Run zigautorandr").dependOn(&run.step);
 
     const tests = b.addTest(.{ .root_module = exe.root_module });
     b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);

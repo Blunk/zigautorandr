@@ -17,7 +17,7 @@ output name. See README.md for user-facing behaviour.
 ## Commands
 
 ```sh
-zig build                 # -> zig-out/bin/edidrandr
+zig build                 # -> zig-out/bin/zigautorandr
 zig build test            # unit tests (no X server needed)
 zig build run -- status   # args after --
 ```
@@ -60,7 +60,7 @@ iteration. Only `Connection.events` and the daemon's `last_key` use `gpa`.
 
 ## Profile format compatibility
 
-Profiles in `~/.config/edidrandr/*.json` are user data. New `OutputConfig`
+Profiles in `~/.config/zigautorandr/*.json` are user data. New `OutputConfig`
 fields must have defaults so old profiles keep parsing
 (`ignore_unknown_fields` is on). Don't change the fingerprint algorithm
 without a migration – it would silently stop every saved profile from matching.

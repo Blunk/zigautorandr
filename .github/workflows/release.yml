@@ -28,17 +28,17 @@ jobs:
           for target in x86_64-linux-musl aarch64-linux-musl; do
             # Fails if the tag doesn't match the version in build.zig.zon.
             zig build -Doptimize=ReleaseSafe -Dtarget=$target --prefix "out/$target"
-            name="edidrandr-$version-$target"
+            name="zigautorandr-$version-$target"
             mkdir "$name"
-            cp "out/$target/bin/edidrandr" README.md "$name/"
+            cp "out/$target/bin/zigautorandr" README.md "$name/"
             if [ -f LICENSE ]; then cp LICENSE "$name/"; fi
             tar -czf "dist/$name.tar.gz" "$name"
           done
           (cd dist && sha256sum -- * > SHA256SUMS)
       - name: Check version
         run: |
-          actual="$(out/x86_64-linux-musl/bin/edidrandr --version)"
-          expected="edidrandr ${GITHUB_REF_NAME#v}"
+          actual="$(out/x86_64-linux-musl/bin/zigautorandr --version)"
+          expected="zigautorandr ${GITHUB_REF_NAME#v}"
           echo "$actual"
           test "$actual" = "$expected"
       - name: Publish
@@ -49,4 +49,4 @@ jobs:
           case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag --generate-notes $prerelease \
-            --title "edidrandr $GITHUB_REF_NAME"
+            --title "zigautorandr $GITHUB_REF_NAME"

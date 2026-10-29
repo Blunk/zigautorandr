@@ -1,4 +1,4 @@
-//! edidrandr - autorandr-like monitor profiles keyed on EDID instead of
+//! zigautorandr - autorandr-like monitor profiles keyed on EDID instead of
 //! (unstable) output names.
 
 const std = @import("std");
@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const Rotation = x11.Rotation;
 
 const usage =
-    \\Usage: edidrandr [command] [options]
+    \\Usage: zigautorandr [command] [options]
     \\
     \\Commands:
     \\  status             show connected monitors and profiles (default)
@@ -26,8 +26,8 @@ const usage =
     \\  -h, --help         show this help
     \\  -V, --version      show the version
     \\
-    \\Profiles are stored in $XDG_CONFIG_HOME/edidrandr/<profile>.json.
-    \\If $XDG_CONFIG_HOME/edidrandr/postswitch is executable, it is run with
+    \\Profiles are stored in $XDG_CONFIG_HOME/zigautorandr/<profile>.json.
+    \\If $XDG_CONFIG_HOME/zigautorandr/postswitch is executable, it is run with
     \\the profile name as argument after a profile was applied.
     \\
 ;
@@ -609,10 +609,10 @@ fn cmdRemove(ctx: *Ctx, name: []const u8) !void {
 
 fn configDir(arena: Allocator) ![]const u8 {
     if (std.posix.getenv("XDG_CONFIG_HOME")) |dir| {
-        if (dir.len != 0) return std.fs.path.join(arena, &.{ dir, "edidrandr" });
+        if (dir.len != 0) return std.fs.path.join(arena, &.{ dir, "zigautorandr" });
     }
     const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
-    return std.fs.path.join(arena, &.{ home, ".config", "edidrandr" });
+    return std.fs.path.join(arena, &.{ home, ".config", "zigautorandr" });
 }
 
 pub fn main() u8 {
@@ -652,7 +652,7 @@ fn run(ctx: *Ctx) !void {
             ctx.print("{s}", .{usage});
             return;
         } else if (std.mem.eql(u8, arg, "-V") or std.mem.eql(u8, arg, "--version")) {
-            ctx.print("edidrandr {s}\n", .{build_options.version});
+            ctx.print("zigautorandr {s}\n", .{build_options.version});
             return;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             std.log.err("unknown option '{s}'\n\n{s}", .{ arg, usage });

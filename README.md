@@ -1,4 +1,4 @@
-# edidrandr
+# zigautorandr
 
 autorandr-style monitor profiles for X11, but matched by **EDID** instead of
 output names (`DisplayPort-6` may become `DisplayPort-8` after a dock/MST
@@ -9,27 +9,27 @@ extension directly over `/tmp/.X11-unix/X<n>` (with MIT-MAGIC-COOKIE auth from
 `~/.Xauthority`). No Xlib/xcb, no `xrandr` binary.
 
 ```sh
-zig build -Doptimize=ReleaseSafe     # -> zig-out/bin/edidrandr
+zig build -Doptimize=ReleaseSafe     # -> zig-out/bin/zigautorandr
 zig build test
-zig-out/bin/edidrandr --version
+zig-out/bin/zigautorandr --version
 ```
 
 ## Usage
 
 ```sh
-edidrandr                  # connected monitors + profiles (detected/current)
-edidrandr save docked      # store the current layout
-edidrandr change           # apply the profile matching the connected monitors
-edidrandr load docked      # apply a specific profile
-edidrandr daemon           # watch RandR hotplug events, run `change` on each
-edidrandr --dry-run change # show what would be done
+zigautorandr                  # connected monitors + profiles (detected/current)
+zigautorandr save docked      # store the current layout
+zigautorandr change           # apply the profile matching the connected monitors
+zigautorandr load docked      # apply a specific profile
+zigautorandr daemon           # watch RandR hotplug events, run `change` on each
+zigautorandr --dry-run change # show what would be done
 ```
 
-Start `edidrandr daemon &` from `~/.xinitrc` / your WM autostart to switch
+Start `zigautorandr daemon &` from `~/.xinitrc` / your WM autostart to switch
 automatically on hotplug (no udev rule needed).
 
-Profiles live in `$XDG_CONFIG_HOME/edidrandr/<name>.json`. An executable
-`$XDG_CONFIG_HOME/edidrandr/postswitch` is run with the profile name after a
+Profiles live in `$XDG_CONFIG_HOME/zigautorandr/<name>.json`. An executable
+`$XDG_CONFIG_HOME/zigautorandr/postswitch` is run with the profile name after a
 switch (e.g. to restart your bar or reset the wallpaper).
 
 ## How matching works
@@ -88,7 +88,7 @@ keep loading, and don't change the fingerprint without a migration path.
 The version lives in exactly one place: `.version` in `build.zig.zon`
 (semver). `build.zig` combines it with `git describe` for `--version`:
 
-| checkout                          | `edidrandr --version`            |
+| checkout                          | `zigautorandr --version`            |
 |-----------------------------------|----------------------------------|
 | clean tag `v0.2.0`                | `0.2.0`                          |
 | 3 commits after `v0.2.0`          | `0.2.0-dev.3+gabc1234`           |
