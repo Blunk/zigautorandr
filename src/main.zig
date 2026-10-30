@@ -58,6 +58,12 @@ const OutputConfig = struct {
     htotal: u32 = 0,
     vtotal: u32 = 0,
     mode_flags: u32 = 0,
+    /// CRTC transform (`xrandr --scale/--transform`), 3x3 row-major, applied
+    /// after rotation. Absent means identity, e.g. 1.5x scaling is
+    /// [1.5,0,0, 0,1.5,0, 0,0,1].
+    transform: ?[9]f64 = null,
+    /// Filter for a non-identity transform; absent means "bilinear" (like xrandr).
+    filter: ?[]const u8 = null,
 
     fn rotationBits(e: OutputConfig) u16 {
         var bits: u16 = switch (e.rotation) {
@@ -69,6 +75,72 @@ const OutputConfig = struct {
         if (e.reflect_x) bits |= Rotation.reflect_x;
         if (e.reflect_y) bits |= Rotation.reflect_y;
         return bits;
+    }
+
+    fn wantTransform(e: OutputConfig) !CrtcTransform {
+        const t = e.transform orelse return .{};
+        var out: CrtcTransform = .{ .filter = e.filter orelse "bilinear" };
+        for (&out.matrix, t) |*o, v| {
+            if (!std.math.isFinite(v) or @abs(v) >= 32768) return error.InvalidTransform;
+            o.* = @intFromFloat(@round(v * x11.fixed_one));
+        }
+        if (x11.isIdentity(out.matrix)) out.filter = "";
+        return out;
+    }
+};
+
+const CrtcTransform = struct {
+    matrix: x11.Transform = x11.identity_transform,
+    /// Irrelevant for the identity transform.
+    filter: []const u8 = "",
+
+    fn eql(a: CrtcTransform, b: CrtcTransform) bool {
+        if (!std.mem.eql(i32, &a.matrix, &b.matrix)) return false;
+        return x11.isIdentity(a.matrix) or std.mem.eql(u8, a.filter, b.filter);
+    }
+
+    fn toFloat(t: CrtcTransform) ?[9]f64 {
+        if (x11.isIdentity(t.matrix)) return null;
+        var out: [9]f64 = undefined;
+        for (&out, t.matrix) |*o, v| o.* = @as(f64, @floatFromInt(v)) / x11.fixed_one;
+        return out;
+    }
+
+    /// Size the CRTC covers on the screen for `mode`, computed like the X
+    /// server does: rotation first, then the transform, rounded outwards.
+    fn footprint(t: CrtcTransform, mode: x11.ModeInfo, rotation: u16) !struct { w: u32, h: u32 } {
+        const sideways = rotation & (Rotation.rotate_90 | Rotation.rotate_270) != 0;
+        const w: f64 = @floatFromInt(if (sideways) mode.height else mode.width);
+        const h: f64 = @floatFromInt(if (sideways) mode.width else mode.height);
+        var m: [9]f64 = undefined;
+        for (&m, t.matrix) |*o, v| o.* = @as(f64, @floatFromInt(v)) / x11.fixed_one;
+        var min_x = std.math.inf(f64);
+        var min_y = std.math.inf(f64);
+        var max_x = -std.math.inf(f64);
+        var max_y = -std.math.inf(f64);
+        for ([_][2]f64{ .{ 0, 0 }, .{ w, 0 }, .{ 0, h }, .{ w, h } }) |p| {
+            const z = m[6] * p[0] + m[7] * p[1] + m[8];
+            if (!(z > 0)) return error.InvalidTransform;
+            const x = (m[0] * p[0] + m[1] * p[1] + m[2]) / z;
+            const y = (m[3] * p[0] + m[4] * p[1] + m[5]) / z;
+            min_x = @min(min_x, @floor(x));
+            min_y = @min(min_y, @floor(y));
+            max_x = @max(max_x, @ceil(x));
+            max_y = @max(max_y, @ceil(y));
+        }
+        if (max_x - min_x > 65535 or max_y - min_y > 65535) return error.InvalidTransform;
+        return .{ .w = @intFromFloat(max_x - min_x), .h = @intFromFloat(max_y - min_y) };
+    }
+
+    /// " scale 1.5x1.5", " transform [...]" or "" for the identity.
+    fn describe(t: CrtcTransform, arena: Allocator) ![]const u8 {
+        const f = t.toFloat() orelse return "";
+        var r: [9]f64 = undefined;
+        for (&r, f) |*o, v| o.* = @round(v * 1000) / 1000;
+        if (t.matrix[1] == 0 and t.matrix[2] == 0 and t.matrix[3] == 0 and t.matrix[5] == 0 and
+            t.matrix[6] == 0 and t.matrix[7] == 0 and t.matrix[8] == x11.fixed_one)
+            return std.fmt.allocPrint(arena, " scale {d}x{d}", .{ r[0], r[4] });
+        return std.fmt.allocPrint(arena, " transform {any}", .{r});
     }
 };
 
@@ -94,11 +166,14 @@ const Monitor = struct {
     /// Set when the output is active.
     crtc: ?x11.CrtcInfo = null,
     mode: ?x11.ModeInfo = null,
+    transform: CrtcTransform = .{},
 };
 
 const State = struct {
     res: x11.Resources,
     crtcs: []x11.CrtcInfo,
+    /// Transforms of `crtcs` (same index).
+    transforms: []x11.CrtcTransform,
     /// Connected outputs, sorted by name.
     monitors: []Monitor,
     primary: u32,
@@ -164,6 +239,8 @@ fn gatherState(arena: Allocator, conn: *x11.Connection, probe: bool) !State {
     const res = try conn.getScreenResources(arena, probe);
     const crtcs = try arena.alloc(x11.CrtcInfo, res.crtcs.len);
     for (crtcs, res.crtcs) |*c, id| c.* = try conn.getCrtcInfo(arena, id, res.config_timestamp);
+    const transforms = try arena.alloc(x11.CrtcTransform, res.crtcs.len);
+    for (transforms, res.crtcs) |*t, id| t.* = try conn.getCrtcTransform(arena, id);
 
     const edid_atom = try conn.internAtom(arena, "EDID", true);
     const connector_atom = try conn.internAtom(arena, "CONNECTOR_ID", true);
@@ -185,10 +262,11 @@ fn gatherState(arena: Allocator, conn: *x11.Connection, probe: bool) !State {
         } else {
             mon.fingerprint = try std.fmt.allocPrint(arena, "output:{s}", .{info.name});
         }
-        for (crtcs) |c| {
+        for (crtcs, transforms) |c, t| {
             if (c.id == info.crtc and c.mode != 0) {
                 mon.crtc = c;
                 mon.mode = res.findMode(c.mode);
+                mon.transform = .{ .matrix = t.current, .filter = t.current_filter };
             }
         }
         try monitors.append(arena, mon);
@@ -199,6 +277,7 @@ fn gatherState(arena: Allocator, conn: *x11.Connection, probe: bool) !State {
     return .{
         .res = res,
         .crtcs = crtcs,
+        .transforms = transforms,
         .monitors = monitors.items,
         .primary = try conn.getOutputPrimary(arena),
         .width = geo.width,
@@ -226,6 +305,8 @@ fn profileFromState(arena: Allocator, state: State) !Profile {
         e.htotal = mode.htotal;
         e.vtotal = mode.vtotal;
         e.mode_flags = mode.flags;
+        e.transform = m.transform.toFloat();
+        if (e.transform != null) e.filter = m.transform.filter;
     }
     return .{ .outputs = outputs };
 }
@@ -286,6 +367,8 @@ fn isApplied(state: State, profile: Profile, mapping: []const usize) bool {
         if (c.x != e.x or c.y != e.y or c.rotation != e.rotationBits()) return false;
         const want = pickMode(state, m, e) orelse return false;
         if (c.mode != want.id) return false;
+        const transform = e.wantTransform() catch return false;
+        if (!m.transform.eql(transform)) return false;
     }
     return true;
 }
@@ -314,7 +397,15 @@ const Ctx = struct {
 
 fn apply(ctx: *Ctx, conn: *x11.Connection, state: State, profile: Profile, mapping: []const usize) !void {
     const arena = ctx.arena;
-    const Plan = struct { mode: ?x11.ModeInfo = null, x: i16 = 0, y: i16 = 0, rotation: u16 = Rotation.rotate_0, output: u32 = 0, name: []const u8 = "" };
+    const Plan = struct {
+        mode: ?x11.ModeInfo = null,
+        x: i16 = 0,
+        y: i16 = 0,
+        rotation: u16 = Rotation.rotate_0,
+        transform: CrtcTransform = .{},
+        output: u32 = 0,
+        name: []const u8 = "",
+    };
     const plans = try arena.alloc(Plan, state.crtcs.len);
     @memset(plans, .{});
     const placed = try arena.alloc(bool, state.monitors.len);
@@ -347,14 +438,23 @@ fn apply(ctx: *Ctx, conn: *x11.Connection, state: State, profile: Profile, mappi
             const y = std.math.cast(i16, e.y) orelse return error.InvalidPosition;
             if (x < 0 or y < 0) return error.InvalidPosition;
             const rotation = e.rotationBits();
-            plans[k] = .{ .mode = mode, .x = x, .y = y, .rotation = rotation, .output = m.output, .name = m.name };
+            const transform = e.wantTransform() catch |err| {
+                std.log.err("{s}: invalid transform", .{m.name});
+                return err;
+            };
+            if (!x11.isIdentity(transform.matrix) and !state.transforms[k].supported) {
+                std.log.err("{s}: the driver doesn't support scaling/transforms", .{m.name});
+                return error.TransformNotSupported;
+            }
+            plans[k] = .{ .mode = mode, .x = x, .y = y, .rotation = rotation, .transform = transform, .output = m.output, .name = m.name };
             done.* = true;
 
-            const sideways = rotation & (Rotation.rotate_90 | Rotation.rotate_270) != 0;
-            const w: u32 = if (sideways) mode.height else mode.width;
-            const h: u32 = if (sideways) mode.width else mode.height;
-            fb_w = @max(fb_w, @as(u32, @intCast(x)) + w);
-            fb_h = @max(fb_h, @as(u32, @intCast(y)) + h);
+            const size = transform.footprint(mode, rotation) catch |err| {
+                std.log.err("{s}: invalid transform", .{m.name});
+                return err;
+            };
+            fb_w = @max(fb_w, @as(u32, @intCast(x)) + size.w);
+            fb_h = @max(fb_h, @as(u32, @intCast(y)) + size.h);
             if (e.primary) primary = m.output;
         }
     }
@@ -369,10 +469,11 @@ fn apply(ctx: *Ctx, conn: *x11.Connection, state: State, profile: Profile, mappi
     }
 
     const changed = try arena.alloc(bool, state.crtcs.len);
-    for (state.crtcs, plans, changed) |c, p, *ch| {
+    for (state.crtcs, state.transforms, plans, changed) |c, t, p, *ch| {
         const want: u32 = if (p.mode) |mode| mode.id else 0;
+        const current: CrtcTransform = .{ .matrix = t.current, .filter = t.current_filter };
         ch.* = c.mode != want or (want != 0 and (c.x != p.x or c.y != p.y or c.rotation != p.rotation or
-            c.outputs.len != 1 or c.outputs[0] != p.output));
+            c.outputs.len != 1 or c.outputs[0] != p.output or !current.eql(p.transform)));
     }
 
     const dry = ctx.dry_run;
@@ -398,13 +499,18 @@ fn apply(ctx: *Ctx, conn: *x11.Connection, state: State, profile: Profile, mappi
         if (!dry) try conn.setScreenSize(@intCast(fb_w), @intCast(fb_h), mm_w, mm_h);
     }
 
-    for (state.crtcs, plans, changed) |c, p, ch| {
+    for (state.crtcs, state.transforms, plans, changed) |c, t, p, ch| {
         const mode = p.mode orelse continue;
         if (!ch) continue;
-        ctx.print("  {s}: {d}x{d}@{d:.2} +{d}+{d} {t} on CRTC 0x{x}\n", .{
-            p.name, mode.width, mode.height, mode.refresh(), p.x, p.y, rotationName(p.rotation), c.id,
+        ctx.print("  {s}: {d}x{d}@{d:.2} +{d}+{d} {t}{s} on CRTC 0x{x}\n", .{
+            p.name,                          mode.width, mode.height, mode.refresh(), p.x, p.y, rotationName(p.rotation),
+            try p.transform.describe(arena), c.id,
         });
-        if (!dry) try conn.setCrtcConfig(arena, c.id, ts, p.x, p.y, mode.id, p.rotation, &.{p.output});
+        if (dry) continue;
+        // The transform is pending until the following SetCrtcConfig.
+        const pending: CrtcTransform = .{ .matrix = t.pending, .filter = t.pending_filter };
+        if (!pending.eql(p.transform)) try conn.setCrtcTransform(c.id, p.transform.matrix, p.transform.filter);
+        try conn.setCrtcConfig(arena, c.id, ts, p.x, p.y, mode.id, p.rotation, &.{p.output});
     }
 
     if (primary != state.primary) {
@@ -485,8 +591,9 @@ fn cmdStatus(ctx: *Ctx, conn: *x11.Connection) !void {
         if (m.crtc) |c| {
             const mode = m.mode.?;
             const primary = if (state.primary == m.output) " primary" else "";
-            ctx.print("  {s:<16} {d}x{d}@{d:.2} +{d}+{d} {t}{s}\n", .{
-                "", mode.width, mode.height, mode.refresh(), c.x, c.y, rotationName(c.rotation), primary,
+            ctx.print("  {s:<16} {d}x{d}@{d:.2} +{d}+{d} {t}{s}{s}\n", .{
+                "",                                  mode.width, mode.height, mode.refresh(), c.x, c.y, rotationName(c.rotation),
+                try m.transform.describe(ctx.arena), primary,
             });
         } else ctx.print("  {s:<16} off\n", .{""});
     }
@@ -519,7 +626,10 @@ fn cmdSave(ctx: *Ctx, conn: *x11.Connection, name: []const u8) !void {
     }
     const state = try gatherState(ctx.arena, conn, true);
     const profile = try profileFromState(ctx.arena, state);
-    const json = try std.json.Stringify.valueAlloc(ctx.arena, profile, .{ .whitespace = .indent_2 });
+    const json = try std.json.Stringify.valueAlloc(ctx.arena, profile, .{
+        .whitespace = .indent_2,
+        .emit_null_optional_fields = false,
+    });
     try std.fs.cwd().makePath(ctx.config_dir);
     try std.fs.cwd().writeFile(.{ .sub_path = path, .data = json });
     ctx.print("Saved profile '{s}' to {s}\n", .{ name, path });
@@ -715,4 +825,45 @@ test matchProfile {
 
     entries[0].fingerprint = "ccc";
     try std.testing.expect(try matchProfile(a, .{ .outputs = &entries }, &monitors) == null);
+}
+
+test CrtcTransform {
+    const mode: x11.ModeInfo = .{
+        .id = 1,
+        .width = 1920,
+        .height = 1080,
+        .dot_clock = 0,
+        .hsync_start = 0,
+        .hsync_end = 0,
+        .htotal = 0,
+        .hskew = 0,
+        .vsync_start = 0,
+        .vsync_end = 0,
+        .vtotal = 0,
+        .flags = 0,
+        .name = "",
+    };
+    // Old profiles without transform are unscaled.
+    const old = try std.json.parseFromSliceLeaky(OutputConfig, std.testing.allocator, "{\"fingerprint\":\"a\"}", .{});
+    const identity = try old.wantTransform();
+    try std.testing.expect(identity.eql(.{}));
+    try std.testing.expectEqual(null, identity.toFloat());
+
+    const e: OutputConfig = .{ .fingerprint = "a", .transform = .{ 1.5, 0, 0, 0, 1.25, 0, 0, 0, 1 } };
+    const t = try e.wantTransform();
+    try std.testing.expectEqualStrings("bilinear", t.filter);
+    try std.testing.expectEqual(e.transform.?, t.toFloat().?);
+    const size = try t.footprint(mode, Rotation.rotate_0);
+    try std.testing.expectEqual(2880, size.w);
+    try std.testing.expectEqual(1350, size.h);
+    // Rotation is applied before the transform.
+    const rotated = try t.footprint(mode, Rotation.rotate_90);
+    try std.testing.expectEqual(1620, rotated.w);
+    try std.testing.expectEqual(2400, rotated.h);
+    // Filter only matters for non-identity transforms.
+    try std.testing.expect(!t.eql(.{ .matrix = t.matrix, .filter = "nearest" }));
+    try std.testing.expect(identity.eql(.{ .filter = "nearest" }));
+
+    const bad: OutputConfig = .{ .fingerprint = "a", .transform = .{ std.math.nan(f64), 0, 0, 0, 1, 0, 0, 0, 1 } };
+    try std.testing.expectError(error.InvalidTransform, bad.wantTransform());
 }

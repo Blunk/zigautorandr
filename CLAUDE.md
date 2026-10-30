@@ -52,8 +52,11 @@ committing.
 - `src/main.zig` – profile JSON schema (`OutputConfig`/`Profile`), `gatherState`
   (current X state, EDID via RandR property with sysfs fallback through
   `CONNECTOR_ID`), `matchProfile`, `pickMode`, `isApplied`, `apply` (grab
-  server → disable changed/non-fitting CRTCs → SetScreenSize → SetCrtcConfig →
-  primary → sync), CLI commands and the `daemon` loop.
+  server → disable changed/non-fitting CRTCs → SetScreenSize →
+  SetCrtcTransform (only pending until the CRTC's next SetCrtcConfig) →
+  SetCrtcConfig → primary → sync), CLI commands and the `daemon` loop.
+  `CrtcTransform.footprint` must match the server's transformed CRTC size
+  (rotation first, then transform, rounded outwards) or SetCrtcConfig fails.
 
 Allocation: a per-run arena (`ctx.arena`); the daemon resets an arena per
 iteration. Only `Connection.events` and the daemon's `last_key` use `gpa`.

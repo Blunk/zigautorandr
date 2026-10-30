@@ -170,6 +170,28 @@ pub const CrtcInfo = struct {
     possible: []u32,
 };
 
+/// 16.16 fixed point, as used by the RENDER/RandR transform requests.
+pub const fixed_one: i32 = 1 << 16;
+
+/// 3x3 projective transform, row-major, 16.16 fixed point.
+pub const Transform = [9]i32;
+
+pub const identity_transform: Transform = .{ fixed_one, 0, 0, 0, fixed_one, 0, 0, 0, fixed_one };
+
+pub fn isIdentity(t: Transform) bool {
+    return std.mem.eql(i32, &t, &identity_transform);
+}
+
+pub const CrtcTransform = struct {
+    /// Set by SetCrtcTransform, takes effect with the next SetCrtcConfig.
+    pending: Transform,
+    pending_filter: []const u8,
+    current: Transform,
+    current_filter: []const u8,
+    /// Whether the driver supports transforms on this CRTC.
+    supported: bool,
+};
+
 pub const Property = struct {
     type: u32,
     format: u8,
@@ -193,6 +215,12 @@ fn readU32s(arena: Allocator, bytes: []const u8, off: *usize, n: usize) ![]u32 {
         off.* += 4;
     }
     return out;
+}
+
+fn readTransform(bytes: []const u8, off: usize) Transform {
+    var t: Transform = undefined;
+    for (&t, 0..) |*v, i| v.* = get(i32, bytes, off + i * 4);
+    return t;
 }
 
 pub const Connection = struct {
@@ -564,6 +592,36 @@ pub const Connection = struct {
             2 => return error.InvalidTime,
             else => return error.SetCrtcConfigFailed,
         }
+    }
+
+    /// The new transform is only pending until the CRTC's next SetCrtcConfig.
+    pub fn setCrtcTransform(self: *Connection, crtc: u32, transform: Transform, filter: []const u8) !void {
+        if (filter.len > 256) return error.FilterNameTooLong;
+        var r = Request.init(self.randr_major, 26);
+        r.put(u32, crtc);
+        for (transform) |v| r.put(i32, v);
+        r.put(u16, @intCast(filter.len));
+        r.put(u16, 0);
+        r.putBytes(filter); // no filter parameters
+        _ = try self.send(r.finish());
+    }
+
+    pub fn getCrtcTransform(self: *Connection, arena: Allocator, crtc: u32) !CrtcTransform {
+        var r = Request.init(self.randr_major, 27);
+        r.put(u32, crtc);
+        const rep = try self.reply(arena, try self.send(r.finish()));
+        const pending_len = get(u16, rep, 88);
+        const pending_nparams = get(u16, rep, 90);
+        const current_len = get(u16, rep, 92);
+        const pending_off: usize = 96;
+        const current_off = pending_off + pad4(pending_len) + @as(usize, pending_nparams) * 4;
+        return .{
+            .pending = readTransform(rep, 8),
+            .pending_filter = rep[pending_off..][0..pending_len],
+            .supported = rep[44] != 0,
+            .current = readTransform(rep, 48),
+            .current_filter = rep[current_off..][0..current_len],
+        };
     }
 
     pub fn setOutputPrimary(self: *Connection, output: u32) !void {

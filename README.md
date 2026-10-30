@@ -44,9 +44,23 @@ switch (e.g. to restart your bar or reset the wallpaper).
 - With several matching profiles, `change` keeps an already active one,
   otherwise applies the alphabetically first.
 
+## Scaling
+
+The CRTC transform (`xrandr --scale`, `--scale-from`, `--transform`) is saved
+per output as a 3x3 row-major matrix plus the scaling filter; outputs without
+it are unscaled. E.g. `xrandr --output eDP --scale 0.5x0.5` is stored as
+
+```json
+"transform": [0.5, 0, 0, 0, 0.5, 0, 0, 0, 1],
+"filter": "bilinear"
+```
+
+and the screen size is computed from the scaled size of each output. Filter
+parameters (convolution filters) are not saved.
+
 ## Not supported (yet)
 
-Scaling/transforms, panning, gamma, custom DPI (screen size is set at 96 DPI),
+Panning, gamma, custom DPI (screen size is set at 96 DPI),
 TCP `DISPLAY`s.
 
 ## Continuing development
@@ -58,25 +72,21 @@ X server (scratch `XDG_CONFIG_HOME`, `--dry-run` first).
 
 Open items, roughly by usefulness:
 
-1. **Scaling / transforms** (`xrandr --scale`, HiDPI setups). Add
-   `GetCrtcTransform` (RandR minor 27) / `SetCrtcTransform` (26), store the
-   3x3 fixed-point matrix plus filter in `OutputConfig`, and use the
-   transformed size when computing the screen size in `apply`.
-2. **Real hotplug testing of `daemon`.** Only startup and idle waiting have
+1. **Real hotplug testing of `daemon`.** Only startup and idle waiting have
    been exercised; verify dock/undock, sleep/resume and MST re-enumeration.
    Check whether 1.5 s debounce is enough for docks.
-3. **Fallback profile** for unknown monitor sets (autorandr's `--default`),
+2. **Fallback profile** for unknown monitor sets (autorandr's `--default`),
    e.g. enable all connected outputs side by side at preferred mode.
-4. **Profile priority** when several profiles match the same monitors
+3. **Profile priority** when several profiles match the same monitors
    (currently: keep the active one, else alphabetical first). Options: remember
    the last used profile per monitor set, or a `priority` field.
-5. **DPI**: optional `dpi` per profile instead of the fixed 96 DPI used for
+4. **DPI**: optional `dpi` per profile instead of the fixed 96 DPI used for
    the screen's physical size.
-6. **Panning** (`GetPanning`/`SetPanning`, minors 28/29) and **gamma**
+5. **Panning** (`GetPanning`/`SetPanning`, minors 28/29) and **gamma**
    (minors 22–24), if needed.
-7. **TCP displays** (`host:N` → port 6000+N) and the Linux abstract socket
+6. **TCP displays** (`host:N` → port 6000+N) and the Linux abstract socket
    `@/tmp/.X11-unix/XN` for sandboxed environments.
-8. **Mirroring onto one CRTC**: today every enabled output gets its own CRTC;
+7. **Mirroring onto one CRTC**: today every enabled output gets its own CRTC;
    if a GPU runs out of CRTCs, outputs with identical mode/position could share
    one.
 
