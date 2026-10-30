@@ -184,7 +184,7 @@ const State = struct {
     fn key(s: State, arena: Allocator) ![]const u8 {
         const fps = try arena.alloc([]const u8, s.monitors.len);
         for (fps, s.monitors) |*f, m| f.* = m.fingerprint;
-        std.mem.sort([]const u8, fps, {}, lessThanStr);
+        std.sort.insertion([]const u8, fps, {}, lessThanStr);
         return std.mem.join(arena, ",", fps);
     }
 };
@@ -271,7 +271,7 @@ fn gatherState(arena: Allocator, conn: *x11.Connection, probe: bool) !State {
         }
         try monitors.append(arena, mon);
     }
-    std.mem.sort(Monitor, monitors.items, {}, lessThanMonitor);
+    std.sort.insertion(Monitor, monitors.items, {}, lessThanMonitor);
 
     const geo = try conn.getGeometry(arena, conn.root);
     return .{
@@ -551,7 +551,7 @@ fn listProfiles(ctx: *Ctx) ![]const []const u8 {
         if (entry.kind == .directory or !std.mem.endsWith(u8, entry.name, ".json")) continue;
         try names.append(ctx.arena, try ctx.arena.dupe(u8, entry.name[0 .. entry.name.len - ".json".len]));
     }
-    std.mem.sort([]const u8, names.items, {}, lessThanStr);
+    std.sort.insertion([]const u8, names.items, {}, lessThanStr);
     return names.items;
 }
 

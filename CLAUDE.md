@@ -14,6 +14,16 @@ output name. See README.md for user-facing behaviour.
   via `std.json.Stringify.valueAlloc` / `parseFromSliceLeaky`, `{t}` formats
   enums/errors. Check `/opt/zig-bin-0.15.2/lib/std` when unsure about an API.
 
+## Binary size
+
+Release builds are stripped (`-Dstrip`, default on for non-Debug). Use
+`std.sort.insertion` for the tiny lists we sort; `std.mem.sort` costs
+~40 KB. Don't disable std's segfault handler: its threadlocals happen to
+raise the TLS segment alignment to 8, and with less, Zig 0.15.2's x86_64 TLS
+setup trips an `@alignCast` safety check before `main` (ReleaseSafe crashes at
+startup). Check `readelf -lW <bin> | grep TLS` when changing threadlocals or
+std options.
+
 ## Commands
 
 ```sh

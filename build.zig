@@ -3,6 +3,8 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Strip debug info (default: true for release builds)") orelse
+        (optimize != .Debug);
     const version = b.option([]const u8, "version-string", "Override the version reported by --version") orelse
         resolveVersion(b, manifestVersion(b));
 
@@ -15,6 +17,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .strip = strip,
         }),
     });
     exe.root_module.addOptions("build_options", options);
