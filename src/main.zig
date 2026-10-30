@@ -258,7 +258,7 @@ fn gatherState(arena: Allocator, conn: *x11.Connection, probe: bool) !State {
         };
         if (try fetchEdid(arena, conn, o, edid_atom, connector_atom)) |data| {
             mon.fingerprint = try arena.dupe(u8, &edid.fingerprint(data));
-            mon.description = try edid.describe(arena, data);
+            mon.description = try edid.describe(arena, try edid.parse(data));
         } else {
             mon.fingerprint = try std.fmt.allocPrint(arena, "output:{s}", .{info.name});
         }

@@ -47,8 +47,12 @@ committing.
   use native endian. Requests without a reply report errors only at the next
   `sync()` (`pending_error`); `last_error` holds details for
   `error.XRequestFailed`.
-- `src/edid.zig` – validation, fingerprint (SHA-256 of the 128 byte base block,
-  first 16 bytes as hex), human readable description.
+- `src/edid.zig` – `BaseBlock`, an `extern struct` mirroring the 128 byte
+  EDID base block (packed structs for bit fields, offsets asserted at
+  comptime); `parse` converts the multi-byte fields to native order (all
+  little-endian except the big-endian manufacturer ID). The fingerprint
+  (SHA-256 of the raw base block bytes, first 16 bytes as hex) is computed on
+  the wire bytes, never on the parsed struct. Human readable description.
 - `src/main.zig` – profile JSON schema (`OutputConfig`/`Profile`), `gatherState`
   (current X state, EDID via RandR property with sysfs fallback through
   `CONNECTOR_ID`), `matchProfile`, `pickMode`, `isApplied`, `apply` (grab
