@@ -5,7 +5,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const Environ = std.process.Environ;
 
 /// We announce our native byte order in the connection setup, so the server
 /// talks to us in native order as well.
@@ -224,7 +226,8 @@ fn readTransform(bytes: []const u8, off: usize) Transform {
 }
 
 pub const Connection = struct {
-    fd: posix.fd_t,
+    io: Io,
+    stream: Io.net.Stream,
     gpa: Allocator,
     seq: u16 = 0,
     root: u32 = 0,
@@ -239,40 +242,42 @@ pub const Connection = struct {
 
     /// Connects to $DISPLAY. `gpa` is used for long-lived internal state,
     /// `arena` for temporary allocations during setup.
-    pub fn open(gpa: Allocator, arena: Allocator) !Connection {
-        const display = posix.getenv("DISPLAY") orelse return error.NoDisplay;
+    pub fn open(gpa: Allocator, arena: Allocator, io: Io, env: *const Environ.Map) !Connection {
+        const display = env.get("DISPLAY") orelse return error.NoDisplay;
         const d = try parseDisplay(display);
         var path_buf: [64]u8 = undefined;
         const path = try std.fmt.bufPrint(&path_buf, "/tmp/.X11-unix/X{s}", .{d.number});
-        const stream = std.net.connectUnixSocket(path) catch return error.ConnectionFailed;
-        var conn: Connection = .{ .fd = stream.handle, .gpa = gpa };
+        const addr = try Io.net.UnixAddress.init(path);
+        const stream = addr.connect(io) catch return error.ConnectionFailed;
+        var conn: Connection = .{ .io = io, .stream = stream, .gpa = gpa };
         errdefer conn.close();
-        try conn.setup(arena, d);
+        try conn.setup(arena, env, d);
         try conn.initRandr(arena);
         return conn;
     }
 
     pub fn close(self: *Connection) void {
-        posix.close(self.fd);
+        self.stream.close(self.io);
         self.events.deinit(self.gpa);
     }
 
     fn writeAll(self: *Connection, bytes: []const u8) !void {
-        var off: usize = 0;
-        while (off < bytes.len) off += try posix.write(self.fd, bytes[off..]);
+        var w = self.stream.writer(self.io, &.{});
+        w.interface.writeAll(bytes) catch return w.err orelse error.WriteFailed;
     }
 
+    /// Unbuffered on purpose: waitEvent() polls the socket, so no bytes may
+    /// sit in a userspace buffer.
     fn readExact(self: *Connection, buf: []u8) !void {
-        var off: usize = 0;
-        while (off < buf.len) {
-            const n = try posix.read(self.fd, buf[off..]);
-            if (n == 0) return error.ConnectionClosed;
-            off += n;
-        }
+        var r = self.stream.reader(self.io, &.{});
+        r.interface.readSliceAll(buf) catch |err| switch (err) {
+            error.EndOfStream => return error.ConnectionClosed,
+            error.ReadFailed => return r.err orelse error.ReadFailed,
+        };
     }
 
-    fn setup(self: *Connection, arena: Allocator, d: Display) !void {
-        const cookie = readXauthority(arena, d.number) catch null;
+    fn setup(self: *Connection, arena: Allocator, env: *const Environ.Map, d: Display) !void {
+        const cookie = readXauthority(arena, self.io, env, d.number) catch null;
         const auth_name: []const u8 = if (cookie != null) "MIT-MAGIC-COOKIE-1" else "";
         const auth_data: []const u8 = cookie orelse "";
 
@@ -367,7 +372,7 @@ pub const Connection = struct {
     /// (-1 waits forever).
     pub fn waitEvent(self: *Connection, arena: Allocator, timeout_ms: i32) !?[32]u8 {
         if (self.events.items.len > 0) return self.events.orderedRemove(0);
-        var fds = [_]posix.pollfd{.{ .fd = self.fd, .events = posix.POLL.IN, .revents = 0 }};
+        var fds = [_]posix.pollfd{.{ .fd = self.stream.socket.handle, .events = posix.POLL.IN, .revents = 0 }};
         while (true) {
             if (try posix.poll(&fds, timeout_ms) == 0) return null;
             const p = try self.readPacket(arena);
@@ -641,12 +646,12 @@ pub const Connection = struct {
 
 /// Finds the MIT-MAGIC-COOKIE-1 for our display in ~/.Xauthority. Returns
 /// null if there is none (the server may still accept us, e.g. via xhost).
-fn readXauthority(arena: Allocator, display_number: []const u8) !?[]const u8 {
-    const path = posix.getenv("XAUTHORITY") orelse blk: {
-        const home = posix.getenv("HOME") orelse return null;
+fn readXauthority(arena: Allocator, io: Io, env: *const Environ.Map, display_number: []const u8) !?[]const u8 {
+    const path = env.get("XAUTHORITY") orelse blk: {
+        const home = env.get("HOME") orelse return null;
         break :blk try std.fs.path.join(arena, &.{ home, ".Xauthority" });
     };
-    const data = std.fs.cwd().readFileAlloc(arena, path, 1 << 20) catch return null;
+    const data = Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20)) catch return null;
 
     var host_buf: [posix.HOST_NAME_MAX]u8 = undefined;
     const host = posix.gethostname(&host_buf) catch "";

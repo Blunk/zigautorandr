@@ -34,13 +34,13 @@ pub fn build(b: *std.Build) void {
 
 /// `.version` from build.zig.zon, the single source of truth for the version.
 /// Read at build time on purpose: `@import("build.zig.zon")` would be baked
-/// into the cached build runner, which Zig 0.15 doesn't rebuild when only the
+/// into the cached build runner, which Zig doesn't rebuild when only the
 /// manifest changes, so a version bump would go unnoticed.
 fn manifestVersion(b: *std.Build) []const u8 {
-    const source = b.build_root.handle.readFileAllocOptions(b.allocator, "build.zig.zon", 1 << 16, null, .of(u8), 0) catch |err|
+    const source = b.build_root.handle.readFileAllocOptions(b.graph.io, "build.zig.zon", b.allocator, .limited(1 << 16), .of(u8), 0) catch |err|
         std.process.fatal("reading build.zig.zon: {t}", .{err});
     const Manifest = struct { version: []const u8 };
-    const manifest = std.zon.parse.fromSlice(Manifest, b.allocator, source, null, .{ .ignore_unknown_fields = true }) catch |err|
+    const manifest = std.zon.parse.fromSliceAlloc(Manifest, b.allocator, source, null, .{ .ignore_unknown_fields = true }) catch |err|
         std.process.fatal("parsing build.zig.zon: {t}", .{err});
     return manifest.version;
 }
@@ -56,9 +56,9 @@ fn resolveVersion(b: *std.Build, manifest_version: []const u8) []const u8 {
     const describe_raw = b.runAllowFail(
         &.{ "git", "-C", root, "describe", "--tags", "--match", "v*", "--long", "--dirty", "--abbrev=7" },
         &code,
-        .Ignore,
+        .ignore,
     ) catch {
-        const hash_raw = b.runAllowFail(&.{ "git", "-C", root, "rev-parse", "--short=7", "HEAD" }, &code, .Ignore) catch
+        const hash_raw = b.runAllowFail(&.{ "git", "-C", root, "rev-parse", "--short=7", "HEAD" }, &code, .ignore) catch
             return manifest_version;
         return b.fmt("{s}-dev+g{s}", .{ manifest_version, std.mem.trim(u8, hash_raw, " \r\n") });
     };

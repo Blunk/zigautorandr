@@ -28,7 +28,7 @@ pub const Manufacturer = packed struct(u16) {
 };
 
 /// Byte 20; the meaning of the low bits depends on `is_digital` (bit 7).
-pub const VideoInput = packed union {
+pub const VideoInput = packed union(u8) {
     digital: packed struct(u8) {
         interface: Interface,
         /// 0 = undefined, 1..6 = 6, 8, ..., 16 bits per color, 7 = reserved.

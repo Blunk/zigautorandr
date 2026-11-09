@@ -8,18 +8,23 @@ output name. See README.md for user-facing behaviour.
 - **Zig stdlib only.** No Xlib/xcb/libXrandr, no C imports, no shelling out to
   `xrandr`. New X functionality means implementing the wire request in
   `src/x11.zig`.
-- Target is **Zig 0.15.2** (post-"writergate" std): `std.ArrayList` is
-  unmanaged (`.empty`, `append(gpa, x)`), output goes through `*std.Io.Writer`
-  (`File.stdout().writer(&buf)` then `.interface`, remember `flush()`), JSON
-  via `std.json.Stringify.valueAlloc` / `parseFromSliceLeaky`, `{t}` formats
-  enums/errors. Check `/opt/zig-bin-0.15.2/lib/std` when unsure about an API.
+- Target is **Zig 0.16.0** (`std.Io`): all file, socket and process work
+  takes an `Io` (`ctx.io`, `conn.io`), e.g. `Io.Dir.cwd().readFileAlloc(io,
+  path, gpa, .limited(n))`, `std.process.spawn(io, ...)`. `main` takes
+  `std.process.Init` (gpa, arena, io, `environ_map`, args); env vars come from
+  `ctx.env`, not `std.posix.getenv`. `std.ArrayList` is unmanaged (`.empty`,
+  `append(gpa, x)`), output goes through `*std.Io.Writer`
+  (`Io.File.stdout().writer(io, &buf)` then `.interface`, remember `flush()`),
+  JSON via `std.json.Stringify.valueAlloc` / `parseFromSliceLeaky`, `{t}`
+  formats enums/errors. Check `/opt/zig-bin-0.16.0/lib/std` when unsure about
+  an API.
 
 ## Binary size
 
 Release builds are stripped (`-Dstrip`, default on for non-Debug). Use
 `std.sort.insertion` for the tiny lists we sort; `std.mem.sort` costs
 ~40 KB. Don't disable std's segfault handler: its threadlocals happen to
-raise the TLS segment alignment to 8, and with less, Zig 0.15.2's x86_64 TLS
+raise the TLS segment alignment to 8, and with less, Zig's x86_64 TLS (seen on 0.15.2)
 setup trips an `@alignCast` safety check before `main` (ReleaseSafe crashes at
 startup). Check `readelf -lW <bin> | grep TLS` when changing threadlocals or
 std options.
@@ -39,7 +44,7 @@ committing.
 
 - `.version` in `build.zig.zon` is the only place the version is written.
   `build.zig` reads it **at build time** with `std.zon.parse` instead of
-  `@import("build.zig.zon")`: Zig 0.15 doesn't rebuild the cached build runner
+  `@import("build.zig.zon")`: Zig doesn't rebuild the cached build runner
   when only the manifest changes, so an import would keep reporting a stale
   version after a bump.
 - `resolveVersion` appends `git describe` info (`-dev.N+gHASH[.dirty]`); the

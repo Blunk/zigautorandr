@@ -14,7 +14,7 @@ jobs:
           fetch-depth: 0 # tags are needed for the version string
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
       - name: Format
         run: zig fmt --check build.zig build.zig.zon src
       - name: Test

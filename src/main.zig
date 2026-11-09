@@ -5,6 +5,7 @@ const std = @import("std");
 const x11 = @import("x11.zig");
 const edid = @import("edid.zig");
 const build_options = @import("build_options");
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Rotation = x11.Rotation;
 
@@ -207,26 +208,26 @@ fn fetchEdid(arena: Allocator, conn: *x11.Connection, output: u32, edid_atom: u3
     }
     if (connector_atom != 0) {
         if (try conn.getOutputProperty(arena, output, connector_atom)) |p| {
-            if (p.format == 32 and p.data.len >= 4) return sysfsEdid(arena, x11.get(u32, p.data, 0));
+            if (p.format == 32 and p.data.len >= 4) return sysfsEdid(arena, conn.io, x11.get(u32, p.data, 0));
         }
     }
     return null;
 }
 
-fn sysfsEdid(arena: Allocator, connector_id: u32) ?[]const u8 {
-    var dir = std.fs.openDirAbsolute("/sys/class/drm", .{ .iterate = true }) catch return null;
-    defer dir.close();
+fn sysfsEdid(arena: Allocator, io: Io, connector_id: u32) ?[]const u8 {
+    var dir = Io.Dir.openDirAbsolute(io, "/sys/class/drm", .{ .iterate = true }) catch return null;
+    defer dir.close(io);
     var found: ?[]const u8 = null;
     var it = dir.iterate();
-    while (it.next() catch null) |entry| {
+    while (it.next(io) catch null) |entry| {
         if (std.mem.indexOfScalar(u8, entry.name, '-') == null) continue;
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var path_buf: [Io.Dir.max_path_bytes]u8 = undefined;
         const id_path = std.fmt.bufPrint(&path_buf, "{s}/connector_id", .{entry.name}) catch continue;
-        const id_text = dir.readFileAlloc(arena, id_path, 64) catch continue;
+        const id_text = dir.readFileAlloc(io, id_path, arena, .limited(64)) catch continue;
         const id = std.fmt.parseInt(u32, std.mem.trim(u8, id_text, " \n"), 10) catch continue;
         if (id != connector_id) continue;
         const edid_path = std.fmt.bufPrint(&path_buf, "{s}/edid", .{entry.name}) catch continue;
-        const data = dir.readFileAlloc(arena, edid_path, 1 << 16) catch continue;
+        const data = dir.readFileAlloc(io, edid_path, arena, .limited(1 << 16)) catch continue;
         if (!edid.isValid(data)) continue;
         // Connector ids are only unique per GPU; refuse to guess.
         if (found != null) return null;
@@ -378,7 +379,9 @@ fn isApplied(state: State, profile: Profile, mapping: []const usize) bool {
 const Ctx = struct {
     gpa: Allocator,
     arena: Allocator,
-    out: *std.Io.Writer,
+    io: Io,
+    env: *const std.process.Environ.Map,
+    out: *Io.Writer,
     config_dir: []const u8,
     conn: ?*x11.Connection = null,
     dry_run: bool = false,
@@ -522,13 +525,17 @@ fn apply(ctx: *Ctx, conn: *x11.Connection, state: State, profile: Profile, mappi
 
 fn runHook(ctx: *Ctx, profile_name: []const u8) void {
     const path = std.fs.path.join(ctx.arena, &.{ ctx.config_dir, "postswitch" }) catch return;
-    std.fs.accessAbsolute(path, .{}) catch return;
-    var child = std.process.Child.init(&.{ path, profile_name }, ctx.gpa);
-    const term = child.spawnAndWait() catch |err| {
+    Io.Dir.accessAbsolute(ctx.io, path, .{}) catch return;
+    const term = spawnAndWait(ctx.io, &.{ path, profile_name }) catch |err| {
         std.log.warn("running {s} failed: {t}", .{ path, err });
         return;
     };
-    if (term != .Exited or term.Exited != 0) std.log.warn("{s} failed: {any}", .{ path, term });
+    if (term != .exited or term.exited != 0) std.log.warn("{s} failed: {any}", .{ path, term });
+}
+
+fn spawnAndWait(io: Io, argv: []const []const u8) !std.process.Child.Term {
+    var child = try std.process.spawn(io, .{ .argv = argv });
+    return child.wait(io);
 }
 
 fn applyNamed(ctx: *Ctx, conn: *x11.Connection, state: State, name: []const u8, profile: Profile, mapping: []const usize) !void {
@@ -540,14 +547,14 @@ fn applyNamed(ctx: *Ctx, conn: *x11.Connection, state: State, name: []const u8, 
 // ---- profiles on disk ---------------------------------------------------------
 
 fn listProfiles(ctx: *Ctx) ![]const []const u8 {
-    var dir = std.fs.openDirAbsolute(ctx.config_dir, .{ .iterate = true }) catch |err| switch (err) {
+    var dir = Io.Dir.openDirAbsolute(ctx.io, ctx.config_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return &.{},
         else => return err,
     };
-    defer dir.close();
+    defer dir.close(ctx.io);
     var names: std.ArrayList([]const u8) = .empty;
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(ctx.io)) |entry| {
         if (entry.kind == .directory or !std.mem.endsWith(u8, entry.name, ".json")) continue;
         try names.append(ctx.arena, try ctx.arena.dupe(u8, entry.name[0 .. entry.name.len - ".json".len]));
     }
@@ -557,7 +564,7 @@ fn listProfiles(ctx: *Ctx) ![]const []const u8 {
 
 fn loadProfile(ctx: *Ctx, name: []const u8) !Profile {
     const path = try ctx.profilePath(name);
-    const data = std.fs.cwd().readFileAlloc(ctx.arena, path, 1 << 20) catch |err| switch (err) {
+    const data = Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(1 << 20)) catch |err| switch (err) {
         error.FileNotFound => {
             std.log.err("no profile named '{s}'", .{name});
             return error.ProfileNotFound;
@@ -619,7 +626,7 @@ fn cmdSave(ctx: *Ctx, conn: *x11.Connection, name: []const u8) !void {
     try validateName(name);
     const path = try ctx.profilePath(name);
     if (!ctx.force) {
-        if (std.fs.accessAbsolute(path, .{})) |_| {
+        if (Io.Dir.accessAbsolute(ctx.io, path, .{})) |_| {
             std.log.err("profile '{s}' exists, use --force to overwrite", .{name});
             return error.ProfileExists;
         } else |_| {}
@@ -630,8 +637,8 @@ fn cmdSave(ctx: *Ctx, conn: *x11.Connection, name: []const u8) !void {
         .whitespace = .indent_2,
         .emit_null_optional_fields = false,
     });
-    try std.fs.cwd().makePath(ctx.config_dir);
-    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = json });
+    try Io.Dir.cwd().createDirPath(ctx.io, ctx.config_dir);
+    try Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = path, .data = json });
     ctx.print("Saved profile '{s}' to {s}\n", .{ name, path });
 }
 
@@ -705,7 +712,7 @@ fn cmdDaemon(ctx: *Ctx, conn: *x11.Connection) !void {
 
 fn cmdRemove(ctx: *Ctx, name: []const u8) !void {
     try validateName(name);
-    std.fs.deleteFileAbsolute(try ctx.profilePath(name)) catch |err| switch (err) {
+    Io.Dir.deleteFileAbsolute(ctx.io, try ctx.profilePath(name)) catch |err| switch (err) {
         error.FileNotFound => {
             std.log.err("no profile named '{s}'", .{name});
             return error.ProfileNotFound;
@@ -717,28 +724,27 @@ fn cmdRemove(ctx: *Ctx, name: []const u8) !void {
 
 // ---- main ---------------------------------------------------------------------
 
-fn configDir(arena: Allocator) ![]const u8 {
-    if (std.posix.getenv("XDG_CONFIG_HOME")) |dir| {
+fn configDir(arena: Allocator, env: *const std.process.Environ.Map) ![]const u8 {
+    if (env.get("XDG_CONFIG_HOME")) |dir| {
         if (dir.len != 0) return std.fs.path.join(arena, &.{ dir, "zigautorandr" });
     }
-    const home = std.posix.getenv("HOME") orelse return error.NoHomeDirectory;
+    const home = env.get("HOME") orelse return error.NoHomeDirectory;
     return std.fs.path.join(arena, &.{ home, ".config", "zigautorandr" });
 }
 
-pub fn main() u8 {
-    const gpa = std.heap.smp_allocator;
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
+pub fn main(init: std.process.Init) u8 {
     var out_buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&out_buf);
+    var stdout = Io.File.stdout().writer(init.io, &out_buf);
 
     var ctx: Ctx = .{
-        .gpa = gpa,
-        .arena = arena_state.allocator(),
+        .gpa = init.gpa,
+        .arena = init.arena.allocator(),
+        .io = init.io,
+        .env = init.environ_map,
         .out = &stdout.interface,
         .config_dir = undefined,
     };
-    run(&ctx) catch |err| {
+    run(&ctx, init.minimal.args) catch |err| {
         if (err == error.XRequestFailed) {
             if (ctx.conn) |conn| if (conn.last_error) |e| {
                 std.log.err("X error {d} in request {d}.{d} (value 0x{x})", .{ e.code, e.major, e.minor, e.bad_value });
@@ -750,8 +756,8 @@ pub fn main() u8 {
     return 0;
 }
 
-fn run(ctx: *Ctx) !void {
-    const args = try std.process.argsAlloc(ctx.arena);
+fn run(ctx: *Ctx, process_args: std.process.Args) !void {
+    const args = try process_args.toSlice(ctx.arena);
     var positional: std.ArrayList([]const u8) = .empty;
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--dry-run")) {
@@ -781,10 +787,10 @@ fn run(ctx: *Ctx) !void {
         return error.InvalidArguments;
     }
 
-    ctx.config_dir = try configDir(ctx.arena);
+    ctx.config_dir = try configDir(ctx.arena, ctx.env);
     if (command == .remove) return cmdRemove(ctx, positional.items[1]);
 
-    var conn = try x11.Connection.open(ctx.gpa, ctx.arena);
+    var conn = try x11.Connection.open(ctx.gpa, ctx.arena, ctx.io, ctx.env);
     defer conn.close();
     ctx.conn = &conn;
 

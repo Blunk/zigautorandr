@@ -4,7 +4,7 @@ autorandr-style monitor profiles for X11, but matched by **EDID** instead of
 output names (`DisplayPort-6` may become `DisplayPort-8` after a dock/MST
 re-enumeration; the monitor's EDID doesn't change).
 
-Pure Zig (0.15), stdlib only: it speaks the X11 protocol and the RandR
+Pure Zig (0.16), stdlib only: it speaks the X11 protocol and the RandR
 extension directly over `/tmp/.X11-unix/X<n>` (with MIT-MAGIC-COOKIE auth from
 `~/.Xauthority`). No Xlib/xcb, no `xrandr` binary.
 
@@ -12,6 +12,16 @@ extension directly over `/tmp/.X11-unix/X<n>` (with MIT-MAGIC-COOKIE auth from
 zig build -Doptimize=ReleaseSafe     # -> zig-out/bin/zigautorandr
 zig build test
 zig-out/bin/zigautorandr --version
+```
+
+### Installing
+
+The build's default (install) step copies the binary to `<prefix>/bin`; the
+prefix defaults to `zig-out`. To install into `~/.local/bin`:
+
+```sh
+zig build -Doptimize=ReleaseSafe --prefix ~/.local    # -> ~/.local/bin/zigautorandr
+zig build uninstall --prefix ~/.local                 # removes it again
 ```
 
 ## Usage
